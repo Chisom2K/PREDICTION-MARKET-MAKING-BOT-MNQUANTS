@@ -1,0 +1,7 @@
+kalshi-python
+requests 
+tabulate   
+IPython  
+norm
+scipy
+yfinance
