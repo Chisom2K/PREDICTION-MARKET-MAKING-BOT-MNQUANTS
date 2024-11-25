@@ -30,7 +30,7 @@ async def main():
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
 
-    # Wait until the market is open (Comment out if you want to run the bot at any time)
+    # Wait until the market is open (Comment out if you want to test the bot at any time)
     if is_market_open():
         logging.info("Market is already open. Starting execution...")
     else:
