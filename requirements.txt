@@ -5,3 +5,6 @@ IPython
 norm
 scipy
 yfinance
+aiohttp
+pandas
+websockets
