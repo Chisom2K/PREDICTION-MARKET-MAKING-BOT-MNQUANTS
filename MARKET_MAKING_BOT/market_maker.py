@@ -1,324 +1,180 @@
-import time
-import uuid
-import threading
-from tabulate import tabulate
-import pprint
-from Clients.kalshi_client import HttpError
-from Clients.kalshi_client import ExchangeClient
+import asyncio 
+from Clients.kalshi_client import KalshiHTTPClient
+import uuid 
+import sys
+import logging
 
-class KalshiMarketMaker:
-    def __init__(self, exchange_client, market_ticker):
-        self.exchange_client = exchange_client
-        self.market_ticker = market_ticker
-
-    def get_orderbook(self):
-        try:
-            orderbook = self.exchange_client.get_orderbook(ticker=self.market_ticker)
-            return orderbook['orderbook']
-        except Exception as e:
-            print(f"Error fetching orderbook for {self.market_ticker}: {e}")
-            return None
-
-    def get_bbo(self):
-        orderbook = self.get_orderbook()
-        if orderbook:
-            best_bid = orderbook['yes'][-1][0] if orderbook['yes'] else 0
-            best_bid_quantity = orderbook['yes'][-1][1] if orderbook['yes'] else 0
-            best_ask = 100 - orderbook['no'][-1][0] if orderbook['no'] else 100
-            best_ask_quantity = orderbook['no'][-1][1] if orderbook['no'] else 0
-            mid = (best_bid + best_ask) / 2
-
-            return {
-                'bid': best_bid,
-                'bid_quantity': best_bid_quantity,
-                'ask': best_ask,
-                'ask_quantity': best_ask_quantity,
-                'mid': mid
+class OrderManager(): 
+    
+    def __init__(self, kalshi: KalshiHTTPClient, market: str): 
+        self.kalshi = kalshi
+        self.resting_orders = {
+            "yes": {
+                "id": None, 
+                "price": None,
+                "count": None
+            }, 
+            "no": {
+                "id": None,
+                "price": None,
+                "count": None
             }
-        return None
+        }
+        self.market = market 
+        self.failure_count = 0
+        self.trading = True
+        self.interupted = False
 
-    def print_bbo(self):
-        bbo = self.get_bbo()
-        if bbo:
-            table = [[
-                bbo['bid_quantity'],
-                bbo['bid'],
-                bbo['mid'],
-                bbo['ask'],
-                bbo['ask_quantity']
-            ]]
-            headers = ['BidSz', 'Bid', 'Mid', 'Ask', 'AskSz']
-            print(tabulate(table, headers=headers, tablefmt='fancy_grid'))
-        else:
-            print("Unable to fetch BBO data")
+    def set_market(self, price): 
+        adj_price: int = 50 * int(price / 50) + 25
+        self.market += str(adj_price)
+        logging.info("OM set market to: " + self.market)
+    
+    async def handle_failure(self): 
+        """
+        Cancel all orders and reboot system
+        """
+        # Reload connection, prevent any new orders from being placed
+        logging.info("Reloading connection to Kalshi HTTP client")
+        self.trading = False
+        await asyncio.sleep(1)
+        self.kalshi.login()
+        logging.info("Cancelling all orders")
+        await self.cancel_all_orders()
+        logging.info("Successfully cancelled all orders")
+        self.trading = True
 
-    def get_positions(self):
-        try:
-            positions = self.exchange_client.get_positions(ticker=self.market_ticker)
-            return positions['market_positions']
-        except Exception as e:
-            print(f"Error fetching positions for {self.market_ticker}: {e}")
-            return None
+    async def cancel_all_orders(self): 
+        orders, code = await self.kalshi.get_orders(self.market)
 
-    def get_my_orders(self):
-        try:
-            orders = self.exchange_client.get_orders(ticker=self.market_ticker)
-            return orders['orders']
-        except Exception as e:
-            print(f"Error fetching orders for {self.market_ticker}: {e}")
-            return None
+        if code != 200: 
+            logging.error("Failed to cancel all orders, retrying...")
+            self.failure_count += 1 
+            if self.failure_count > 5:
+                logging.critical("FATAL ERROR: Failed to cancel all orders too many times. Exiting...")
+                sys.exit(1)
 
-    def print_my_orders(self):
-        orders = self.get_my_orders()
-        if not orders:
-            print("No orders found.")
+            await self.handle_failure()
+
+        for order in orders['orders']: 
+            await self.kalshi.cancel_limit_order(order['client_order_id'])
+
+    async def cancelYes(self): 
+        logging.info("Cancelling existing yes order")
+        res, code = await self.kalshi.cancel_limit_order(self.resting_orders["yes"]["id"])
+        print(res)
+
+        if code != 200:
+            logging.error("Failed to cancel yes order, reloading Order Manager")
+            await self.handle_failure() 
             return
 
-        # Group orders by ticker
-        orders_by_ticker = {}
-        for order in orders:
-            ticker = order['ticker']
-            if ticker not in orders_by_ticker:
-                orders_by_ticker[ticker] = {'Yes': None, 'No': None}
+        self.resting_orders["yes"]["id"] = None
 
-            side = order['side'].capitalize()
+    async def cancelNo(self):
+        logging.info("Cancelling existing no order")
+        res, code = await self.kalshi.cancel_limit_order(self.resting_orders["no"]["id"])
+        print(res)
 
-            # Update or set the order for this side
-            if orders_by_ticker[ticker][side] is None or order['remaining_count'] > 0:
-                orders_by_ticker[ticker][side] = order
-
-        for ticker, ticker_orders in orders_by_ticker.items():
-            print(f"\nTicker: {ticker}")
-
-            table_data = []
-            for side, order in ticker_orders.items():
-                if order:
-                    action = order['action'].capitalize()
-                    if side == 'Yes':
-                        price = order['yes_price']
-                    else:  # No side
-                        price = 100 - order['no_price']  # Convert No price to Yes equivalent
-                    quantity = order['remaining_count']
-                    fill_count = order['place_count'] - order['remaining_count']
-
-                    table_data.append([side, action, price, quantity, fill_count])
-
-            # Sort the table data so that 'Yes' always comes before 'No'
-            table_data.sort(key=lambda x: x[0], reverse=True)
-
-            headers = ['Side', 'Action', 'Price', 'Quantity', 'Fill Count']
-            print(tabulate(table_data, headers=headers, tablefmt='pretty'))
-
-    def create_quote(self, theo, edge_requirement):
-        bbo = self.get_bbo()
-        if bbo:
-            bid = min(max(1, theo - edge_requirement), bbo['bid'])
-            ask = max(min(99, theo + edge_requirement), bbo['ask'])
-            return {'bid': bid, 'ask': ask}
-        return None
-
-    def create_quote_strict(self, theo, edge_requirement):
-        bid = max(1, theo - edge_requirement)
-        ask = min(99, theo + edge_requirement)
-        return {'bid': bid, 'ask': ask}
-
-    def send_quote(self, quote, quantity):
-        if not quote:
-            print("No valid quote to send")
+        if code != 200: 
+            logging.error("Failed to cancel no order, reloading Order Manager")
+            await self.handle_failure() 
             return
+        
+        self.resting_orders["no"]["id"] = None
 
-        try:
-            # Place bid (limit buy yes)
-            bid_params = {
-                'ticker': self.market_ticker,
-                'client_order_id': str(uuid.uuid4()),
-                'type': 'limit',
-                'action': 'buy',
-                'side': 'yes',
-                'count': quantity,
-                'yes_price': quote['bid'],
-                'no_price': None,
-            }
-            bid_order = self.exchange_client.create_order(**bid_params)
+    def update_resting(self, fill, side, count): 
 
-            # Place ask (limit buy no)
-            ask_params = {
-                'ticker': self.market_ticker,
-                'client_order_id': str(uuid.uuid4()),
-                'type': 'limit',
-                'action': 'buy',
-                'side': 'no',
-                'count': quantity,
-                'yes_price': None,
-                'no_price': 100 - quote['ask'],
-            }
-            ask_order = self.exchange_client.create_order(**ask_params)
+        if side == "yes": 
+            self.resting_orders["yes"]["count"] -= count
+            if self.resting_orders["yes"]["count"] == 0: 
+                self.resting_orders["yes"]["id"] = None
+                self.resting_orders["yes"]["price"] = None
+        elif side == "no": 
+            self.resting_orders["no"]["count"] -= count
+            if self.resting_orders["no"]["count"] == 0: 
+                self.resting_orders["no"]["id"] = None
+                self.resting_orders["no"]["price"] = None
 
-            return {'bid_order': bid_order, 'ask_order': ask_order}
-        except Exception as e:
-            print(f"Error sending quote for {self.market_ticker}: {e}")
-            return None
-
-    def print_positions(self):
-        positions = self.get_positions()
-        if not positions:
-            print("No positions found.")
+    async def place_order(self, bid_price, bid_count, ask_price, ask_count): 
+        if not self.trading: 
             return
+        self.interupted = False 
 
-        table_data = []
-        for position_group in positions:
-            if isinstance(position_group, list):
-                for position in position_group:
-                    self._add_position_to_table_data(position, table_data)
-            elif isinstance(position_group, dict):
-                self._add_position_to_table_data(position_group, table_data)
+        yes_price = bid_price
+        yes_count = bid_count
 
-        if table_data:
-            headers = ['Ticker', 'Position', 'Exposure', 'Resting Orders', 'Realized PNL', 'Total Traded']
-            print(tabulate(table_data, headers=headers, tablefmt='pretty'))
-        else:
-            print("No valid position data found.")
+        no_price = 100 - ask_price
+        no_count = ask_count
 
-    def _add_position_to_table_data(self, position, table_data):
-        ticker = position['ticker']
-        pos = position['position']
-        exposure = f"${position['market_exposure'] / 100:.2f}"
-        resting_orders = position['resting_orders_count']
-        realized_pnl = f"${position['realized_pnl'] / 100:.2f}"
-        total_traded = f"${position['total_traded'] / 100:.2f}"
-
-        table_data.append([
-            ticker,
-            pos,
-            exposure,
-            resting_orders,
-            realized_pnl,
-            total_traded
-        ])
-
-    def send_bid(self, price, quantity):
-        try:
-            bid_params = {
-                'ticker': self.market_ticker,
-                'client_order_id': str(uuid.uuid4()),
-                'type': 'limit',
-                'action': 'buy',
-                'side': 'yes',
-                'count': quantity,
-                'yes_price': price,
-                'no_price': None,
-            }
-            bid_order = self.exchange_client.create_order(**bid_params)
-            return bid_order
-        except Exception as e:
-            print(f"Error sending bid for {self.market_ticker}: {e}")
-            return None
-
-    def send_ask(self, price, quantity):
-        try:
-            ask_params = {
-                'ticker': self.market_ticker,
-                'client_order_id': str(uuid.uuid4()),
-                'type': 'limit',
-                'action': 'buy',
-                'side': 'no',
-                'count': quantity,
-                'yes_price': None,
-                'no_price': 100 - price,
-            }
-            ask_order = self.exchange_client.create_order(**ask_params)
-            return ask_order
-        except Exception as e:
-            print(f"Error sending ask for {self.market_ticker}: {e}")
-            return None
-
-
-    def pull_all_quotes(self):
-        try:
-            orders = self.get_my_orders()
-            print(f"Retrieved {len(orders)} orders.")
+        if (yes_price != self.resting_orders["yes"]["price"] or yes_count != self.resting_orders["yes"]["count"]) and yes_count > 0: 
+            # Cancel old order if it exists
+            if self.resting_orders["yes"]["id"] is not None or yes_price > 99: 
+                await self.cancelYes()
             
-            if not orders:
-                print("No orders to pull.")
-                return []
-
-            cancelled_orders = []
-            already_cancelled = []
-            other_errors = []
-
-            for order in orders:
-                order_id = order['order_id']
-                print(f"Attempting to cancel order: {order_id}")
-                
-                order_status = self.exchange_client.get_order(order_id)
-                print(f"Order {order_id} status: {order_status}")
-                
-                if order_status['order']['status'] == 'canceled':
-                    print(f"Order {order_id} is already cancelled.")
-                    already_cancelled.append(order_id)
-                    continue
-
-                time.sleep(1)  # Wait for 1 second before attempting to cancel
-
-                try:
-                    result = self.exchange_client.cancel_order(order_id)
-                    if result['order']['remaining_count'] == 0:
-                        cancelled_orders.append(result)
-                        print(f"Successfully cancelled order: {order_id}")
-                        print(f"Cancelled order details: {result}")
-                    else:
-                        print(f"Order {order_id} not fully cancelled. Remaining count: {result['order']['remaining_count']}")
-                except HttpError as e:
-                    print(f"Error cancelling order {order_id}: {e}")
-                    print(f"Full error response: {e.reason}")
-                    if e.status == 404:
-                        already_cancelled.append(order_id)
-                        print(f"Order not found: {order_id}")
-                    else:
-                        other_errors.append((order_id, str(e)))
-                except Exception as e:
-                    print(f"Unexpected error cancelling order {order_id}: {e}")
-                    other_errors.append((order_id, str(e)))
-
-            print(f"Successfully cancelled {len(cancelled_orders)} orders.")
-            if already_cancelled:
-                print(f"Orders already cancelled or not found: {len(already_cancelled)}")
-                for order_id in already_cancelled:
-                    print(f"  - {order_id}")
-            if other_errors:
-                print(f"Other errors occurred for {len(other_errors)} orders:")
-                for order_id, error in other_errors:
-                    print(f"  - Order {order_id}: {error}")
-
-            return cancelled_orders
-
-        except Exception as e:
-            print(f"Error pulling quotes for {self.market_ticker}: {e}")
-            return None
-
-    def pull_side_quotes(self, side):
-        if side not in ['yes', 'no']:
-            print("Invalid side. Use 'yes' or 'no'.")
-            return
-
-        try:
-            orders = self.get_my_orders()
-            if not orders:
-                print("No orders to pull.")
+            if self.interupted:
+                self.interupted = False 
+                logging.info("New information received, cancelling orders")
+                self.cancel_all_orders()
                 return
 
-            cancelled_orders = []
-            for order in orders:
-                if order['side'] == side:
-                    order_id = order['order_id']
-                    try:
-                        result = self.exchange_client.cancel_order(order_id)
-                        cancelled_orders.append(result)
-                    except Exception as e:
-                        print(f"Error cancelling order {order_id}: {e}")
+            if yes_price <= 99 and yes_price >= 1: 
+                logging.info(f"Placing new yes order: {yes_price} at {yes_count}")
+                id = str(uuid.uuid4())
 
-            print(f"Pulled {len(cancelled_orders)} {side} orders.")
-            return cancelled_orders
-        except Exception as e:
-            print(f"Error pulling {side} quotes for {self.market_ticker}: {e}")
-            return None
+                res, code = await self.kalshi.post_limit_order("buy", self.market, "yes", yes_count, id, yes_price=yes_price)
+
+                if code != 201 and res['error']['code'] != "insufficient_balance": 
+                    logging.error(f"Failed to place yes order, {res['error']['message']}, reloading Order Manager")
+                    await self.handle_failure() 
+                    return 
+                elif code != 201: 
+                    # Insufficient balance, only place no order 
+                    logging.error(f"Failed to place yes order, {res['error']['message']}.") 
+                else: 
+                    self.resting_orders["yes"]["id"] = res["order"]["order_id"]
+                    self.resting_orders["yes"]["price"] = yes_price
+                    self.resting_orders["yes"]["count"] = yes_count
+
+                    if self.interupted:
+                        self.interupted = False 
+                        logging.info("New information received, cancelling orders")
+                        self.cancel_all_orders()
+                        return
+
+                    logging.info(f"Successfully placed order, current resting orders: {self.resting_orders}")
+    
+        if (no_price != self.resting_orders["no"]["price"] or no_count != self.resting_orders["no"]["count"]) and no_count > 0:
+            if self.resting_orders["no"]["id"] is not None or no_price > 99: 
+                await self.cancelNo()
+
+            if self.interupted:
+                self.interupted = False 
+                logging.info("New information received, cancelling orders")
+                self.cancel_all_orders()
+                return
+
+            if no_price <= 99 and no_price >= 1:
+                logging.info(f"Placing new no order: {no_price} at {no_count}")
+                id = str(uuid.uuid4())
+
+                res, code = await self.kalshi.post_limit_order("buy", self.market, "no", no_count, id, no_price=no_price)
+
+                if code != 201 and res['error']['code'] != "insufficient_balance":
+                    logging.error(f"Failed to place no order, {res['error']['message']}, reloading Order Manager")
+                    self.handle_failure()
+                    return
+                elif code != 201: 
+                    logging.error(f"Failed to place no order, {res['error']['message']}.")
+                else: 
+                    self.resting_orders["no"]["id"] = res["order"]["order_id"]
+                    self.resting_orders["no"]["price"] = no_price
+                    self.resting_orders["no"]["count"] = no_count
+
+                    if self.interupted:
+                        self.interupted = False 
+                        logging.info("New information received, cancelling orders")
+                        self.cancel_all_orders()
+                        return
+
+                    logging.info(f"Successfully placed order, current resting orders: {self.resting_orders}")
