@@ -8,8 +8,8 @@ def is_market_open() -> bool:
     nyse = mcal.get_calendar('NYSE')
     now = datetime.datetime.now()
     market_schedule = nyse.schedule(start_date=now, end_date=now)
-    market_schedule["market_open"] = pd.to_datetime(market_schedule["market_open"]).dt.tz_convert('US/Eastern')
-    market_schedule["market_close"] = pd.to_datetime(market_schedule["market_close"]).dt.tz_convert('US/Eastern')
+    market_schedule["market_open"] = pd.to_datetime(market_schedule["market_open"]).dt.tz_localize('US/Eastern')
+    market_schedule["market_close"] = pd.to_datetime(market_schedule["market_close"]).dt.tz_localize('US/Eastern')
     market_open_range = mcal.date_range(market_schedule, frequency='1min')
 
     # check if this is not a trading day
@@ -47,7 +47,7 @@ def get_market_ticker():
     market_ticker = ""
     # Check if market_date is a Friday
     if market_date.weekday() == 4:
-        market_ticker = f"INXW-{market_date_str}-B"
+        market_ticker = f"INXW-{market_date_str}-B" #Ticker for S&P
     else:
         market_ticker = f"INXD-{market_date_str}-B"
 
