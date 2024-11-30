@@ -8,15 +8,8 @@ def is_market_open() -> bool:
     nyse = mcal.get_calendar('NYSE')
     now = datetime.datetime.now()
     market_schedule = nyse.schedule(start_date=now, end_date=now)
-    try:
-        market_schedule["market_open"] = pd.to_datetime(market_schedule["market_open"]).dt.tz_localize('US/Eastern')
-    except TypeError:
-        market_schedule["market_open"] = pd.to_datetime(market_schedule["market_open"]).dt.tz_convert('US/Eastern')
-
-    try:
-        market_schedule["market_close"] = pd.to_datetime(market_schedule["market_close"]).dt.tz_localize('US/Eastern')
-    except TypeError:
-        market_schedule["market_close"] = pd.to_datetime(market_schedule["market_close"]).dt.tz_convert('US/Eastern')
+    market_schedule["market_open"] = ensure_timezone(market_schedule["market_open"], 'US/Eastern')
+    market_schedule["market_close"] = ensure_timezone(market_schedule["market_close"], 'US/Eastern')
     market_open_range = mcal.date_range(market_schedule, frequency='1min')
 
     # check if this is not a trading day
@@ -27,6 +20,14 @@ def is_market_open() -> bool:
     now = now.astimezone(pytz.timezone('UTC'))
 
     return not market_open_range.empty and (market_open_range[0] <= now <= market_open_range[-1])
+
+
+def ensure_timezone(data, timezone):
+    """Ensure the given datetime data has the specified timezone."""
+    try:
+        return pd.to_datetime(data).dt.tz_localize(timezone)
+    except TypeError:
+        return pd.to_datetime(data).dt.tz_convert(timezone)
 
 def get_next_trading_day() -> datetime.date:
     nyse = mcal.get_calendar('NYSE')
