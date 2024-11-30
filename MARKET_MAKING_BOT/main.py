@@ -31,15 +31,15 @@ async def main():
 
 
     # Wait until the market is open (Comment out if you want to test the bot at any time)
-    if is_market_open():
-        logging.info("Market is already open. Starting execution...")
-    else:
-        next_day: int = int(time.mktime(time.strptime(str(get_next_trading_day()) + " 09:30:00", "%Y-%m-%d %H:%M:%S")))
-        seconds: int = next_day - int(time.mktime(datetime.datetime.now().timetuple()))
-        logging.info(f"{seconds} seconds until market open.")
-        if seconds > 0:
-            time.sleep(seconds)  # Wait only if seconds is positive
-        logging.info("Market open, starting execution...")
+    # if is_market_open():
+    #     logging.info("Market is already open. Starting execution...")
+    # else:
+    #     next_day: int = int(time.mktime(time.strptime(str(get_next_trading_day()) + " 09:30:00", "%Y-%m-%d %H:%M:%S")))
+    #     seconds: int = next_day - int(time.mktime(datetime.datetime.now().timetuple()))
+    #     logging.info(f"{seconds} seconds until market open.")
+    #     if seconds > 0:
+    #         time.sleep(seconds)  # Wait only if seconds is positive
+    #     logging.info("Market open, starting execution...")
 
     logging.info("Kalshi Trading System v2")
 
