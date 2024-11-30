@@ -4,6 +4,12 @@ from Clients.kalshi_client import KalshiHTTPClient
 import logging
 
 class TradingState(): 
+    """
+
+    Manages the internal state of the trading bot, including the order book, positions,
+    and synchronization between Kalshi data and the bot's logic.
+
+    """
 
     def __init__(self, om: OrderManager, kalshi: KalshiHTTPClient): 
 
@@ -24,7 +30,6 @@ class TradingState():
         logging.info(f"Received S&P update to price {price}")
     
     def set_orderbook(self, orderbook): 
-
         self.orderbook_ba["bids"] = {}
         self.orderbook_ba["asks"] = {}
 
