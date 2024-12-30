@@ -84,8 +84,10 @@ KalshiTradingV2.ipynb
 profile_default/
 ipython_config.py
 
-# .gitignore
+# .security
 config.py
+private_key.pem
+launch.json
 
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is

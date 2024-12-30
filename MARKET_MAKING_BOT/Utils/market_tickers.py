@@ -55,9 +55,9 @@ def get_market_ticker():
     market_ticker = ""
     # Check if market_date is a Friday
     if market_date.weekday() == 4:
-        market_ticker = f"INXW-{market_date_str}-B" #Ticker for S&P
+        market_ticker = f"KXINXU-{market_date_str}-B" # this needs to be changed to ticker for friday
     else:
-        market_ticker = f"INXD-{market_date_str}-B"
+        market_ticker = f"KXINXU-{market_date_str}-B" #Ticker for S&P
 
     return market_ticker
 
