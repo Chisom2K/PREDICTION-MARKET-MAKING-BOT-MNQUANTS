@@ -96,12 +96,22 @@ class OrderManager():
                 self.resting_orders["no"]["id"] = None
                 self.resting_orders["no"]["price"] = None
 
-    async def place_order(self, bid_price, bid_count, ask_price, ask_count): 
+    async def place_quote(self, bid_price, bid_count, ask_price, ask_count): 
+        """
+        Handles placing both 'yes' and 'no' orders.
+        """
         if not self.trading: 
             return
-        self.interupted = False 
+        self.interupted = False
 
-    
+        # Place "yes" order if price and count are provided
+        if bid_price is not None and bid_count > 0:
+            await self.yes_order(bid_price, bid_count)
+
+        # Place "no" order if price and count are provided
+        if ask_price is not None and ask_count > 0:
+            await self.no_order(ask_price, ask_count)
+
     async def yes_order(self, bid_price, bid_count):
         """
         Handles placing or updating the 'yes' order (buy).
