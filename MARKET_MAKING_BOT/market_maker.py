@@ -101,11 +101,16 @@ class OrderManager():
             return
         self.interupted = False 
 
+    
+    async def yes_order(self, bid_price, bid_count):
+        """
+        Handles placing or updating the 'yes' order (buy).
+        """
+        if not self.trading:
+            return
+
         yes_price = bid_price
         yes_count = bid_count
-
-        no_price = 100 - ask_price
-        no_count = ask_count
 
         if (yes_price != self.resting_orders["yes"]["price"] or yes_count != self.resting_orders["yes"]["count"]) and yes_count > 0: 
             # Cancel old order if it exists
@@ -118,7 +123,7 @@ class OrderManager():
                 self.cancel_all_orders()
                 return
 
-            if yes_price <= 99 and yes_price >= 1: 
+            if 1 <= yes_price <= 99:
                 logging.info(f"Placing new yes order: {yes_price} at {yes_count}")
                 id = str(uuid.uuid4())
 
@@ -144,6 +149,16 @@ class OrderManager():
 
                     logging.info(f"Successfully placed order, current resting orders: {self.resting_orders}")
     
+    async def no_order(self, ask_price, ask_count):
+        """
+        Handles placing or updating the 'no' order (sell).
+        """
+        if not self.trading:
+            return
+        
+        no_price = 100 - ask_price
+        no_count = ask_count
+
         if (no_price != self.resting_orders["no"]["price"] or no_count != self.resting_orders["no"]["count"]) and no_count > 0:
             if self.resting_orders["no"]["id"] is not None or no_price > 99: 
                 await self.cancelNo()
@@ -154,7 +169,7 @@ class OrderManager():
                 self.cancel_all_orders()
                 return
 
-            if no_price <= 99 and no_price >= 1:
+            if 1 <= no_price <= 99:
                 logging.info(f"Placing new no order: {no_price} at {no_count}")
                 id = str(uuid.uuid4())
 
